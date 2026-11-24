@@ -1,46 +1,49 @@
 ---
 id: cpp/memory/noexcept-and-move
-title: noexcept 与移动语义
-level: 2
-tags: [cpp, move, exception, interview]
-aliases: [noexcept, move_if_noexcept, 移动语义]
-reviewed: 2026-10-29
-next_review: 2026-10-31
-projects: [industrial-vision-measure]
-sources: [cppreference, cppcoreguidelines C.66]
+title: 移动语义、右值引用与 noexcept
+level: null
+level_status: 待用户确认
+reviewed: 2026-10-30
+next_review: 2026-11-01
+projects: []
+sources: [本次聊天整理]
 ---
 
 ## 一句话
 
-`noexcept` 是"这个函数不抛"的**编译期契约**：容器据此决定敢不敢用你的移动，编译器据此省掉异常清理代码；写挂了会把异常升级成 `std::terminate`。
+移动可转移资源所有权；std::move 本身只是转换表达式类别，不执行资源搬运。
 
 ## 机制
+- std::move 不修改对象，只把表达式转换为右值引用形式；对普通对象，结果是将亡值表达式。它不去掉 const，也不保证调用移动操作。
+- 有可用移动构造时通常优先移动；没有移动构造时，可用的 const T& 拷贝构造仍能接收。显式声明 T(T&&)=delete 时，被选中后报错，不回退复制。编译器默认生成后被定义为删除的移动构造有不同重载规则，不与显式删除混为一谈。
+- 拷贝构造与移动构造都创建新对象；已有对象赋值则分别调用拷贝赋值或移动赋值。复制不一定深拷贝，具体由类型决定。
+- unique_ptr 不可复制，auto b=std::move(a) 转移所有权后 a 为空。一般类型移动后状态按其约定；标准库类型通常有效但状态未指定，不应假定 string 必为空。
+- 自定义、=default、隐式生成都可能提供特殊成员函数。默认移动按成员规则处理：裸指针仅复制地址，不清空源；RAII 成员各自管理资源。
+- 独占裸指针的简化移动构造可用 p(other.p)，再 other.p=nullptr；移动赋值还要先处理目标旧资源，并考虑自移动。对象自身和它管理的资源生命周期不同。
+- noexcept 承诺异常不逃出函数；若逃出则 terminate，外层 catch 无法接住。vector 扩容时，移动不抛异常通常有利于使用移动；可能抛异常且可复制时通常复制，以保护原数据。不可复制时可能只能移动，异常保证受具体条件限制。
 
-- 两种用法：函数说明符 `void f() noexcept;` / 运算符 `noexcept(expr)` → `bool`
-- 违约后果不是 UB，是**直接 terminate**（进程死）
-- 标准库策略 `move_if_noexcept`：**移动构造是 noexcept 才用移动**，否则退回拷贝
-  （因为扩容要强异常保证：搬一半失败必须能回滚）
-- 默认情况：析构函数天然 `noexcept`；`= default` 的移动构造的 noexcept 由成员推导
+## 右值引用：已讲与待补
+
+```cpp
+std::string a = "hello";
+std::string&& r = std::move(a); // 只绑定引用，未转移资源
+std::string b = r;             // 表达式 r 是左值，复制 a 的内容
+std::string c = std::move(r);  // 从 a 移动构造 c；r 仍引用 a
+```
+
+- 类型为 T&& 的具名变量，使用其名字时仍是左值表达式。移动构造参数 other 也是如此；unique_ptr 成员须 data(std::move(other.data))，不能 data(other.data)。初始化列表执行构造，不是赋值。
+- **尚未系统讲清，不标为已掌握**：左值 lvalue、纯右值 prvalue、将亡值 xvalue；glvalue=lvalue+xvalue，rvalue=prvalue+xvalue；值类别是表达式的属性，引用类型与表达式类别的区别。
+- 待继续用实例讲解绑定规则、临时对象与生命周期，再谈引用折叠、完美转发；不以“能否放等号左边”作为完整定义。
 
 ## 追问链
+1. unique_ptr 移动后重复释放吗？→ 源为空，目标管理原资源，不会重复释放。
+2. std::move 一定移动吗？→ 不一定，可复制，也可能编译失败；const 不被移除。
+3. noexcept 为什么影响 vector？→ 提供不抛异常的保证，允许选择移动策略；不能为了性能随意承诺。
 
-1. **不写 noexcept 会怎样？**
-   `std::vector<Frame>` 扩容时退化为拷贝 —— 6 MB 一帧 × 1000 帧 = 6 GB 搬运，而不是几 KB 的指针搬运。
-2. **写了 noexcept 但成员移动会抛呢？**
-   标准规定这个显式 default 的移动构造**被定义为 deleted**（不是编译错误），
-   你在别处一用就得到 "use of deleted function"，极难排查。
-3. **移动之后源对象什么状态？**
-   有效但未指定（valid but unspecified）：能析构、能重新赋值，但不能假设里面还是原值。
-4. **怎么在编译期验证？**
-   `static_assert(noexcept(Frame(std::declval<Frame&&>())));`
+## 关联
+- [[cpp/object-model/rule-of-five]]
 
 ## 项目证据 / 反例
 
-- 工业测量项目：帧对象在 `std::vector` 里攒批处理，移动标了 `noexcept` 才避免每次扩容深拷贝 6 MB。
-- **反例**："标记了 noexcept 就会更快" ✗ —— 它不改变函数体执行速度，
-  改变的是**调用方敢不敢用移动**、以及**异常表要不要生成**。
-- **反例**：以为 `= default` 的移动一定是 noexcept ✗ —— 由成员推导，成员会抛就会抛（强写 noexcept 反而 deleted）。
-
-## 关联
-
-- [[cpp/object-model/rule-of-five]]
+- 未提供项目证据；保留对话中的易错点供复习。
+- 用户已正确解释移动赋值覆盖旧地址会泄漏；易错点是把“内部资源释放”误当作“对象本身销毁”，以及把 string 移动后状态误认为必为空。

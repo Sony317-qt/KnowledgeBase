@@ -1,45 +1,35 @@
 ---
 id: cpp/object-model/rule-of-five
-title: 三/五法则与 = default / = delete
-level: 2
-tags: [cpp, oop, resource, interview]
-aliases: [rule of five, 五法则, 拷贝删除, default delete]
-reviewed: 2026-10-29
-next_review: 2026-10-31
-projects: [industrial-vision-measure]
-sources: [Effective C++ Item 5/6, cppcoreguidelines C.21]
+title: 资源所有权与复制控制
+level: null
+level_status: 待用户确认
+reviewed: 2026-10-30
+next_review: 2026-11-01
+projects: []
+sources: [本次聊天整理]
 ---
 
 ## 一句话
 
-只要自定义了**析构 / 拷贝构造 / 拷贝赋值**中的任意一个，几乎一定需要另外两个（三法则）；
-C++11 再加**移动构造 / 移动赋值**（五法则）。漏写一个，要么 double free，要么对象进不了容器。
+拥有资源的类须让复制、移动和析构规则一致，优先由 RAII 成员完成管理。
 
 ## 机制
-
-- `= default`：让编译器生成默认版本 → 决定**平凡性（trivial）**、能否 `constexpr`、异常规范
-- 手写 `{}`：用户提供 → 不再是 trivial；内置类型成员**依然不初始化**
-- `= delete`：参与重载决议，被选中即编译报错，比"只声明不定义"（链接期才炸）清楚得多
-- `= default` 可能被**隐式删除**：成员是引用 / `const` 无初始化器 / 成员不可拷贝
+- 默认复制裸指针只复制地址：两个对象析构会重复释放。默认赋值还可能覆盖目标原资源地址，导致泄漏。
+- 深拷贝需重新分配资源，例如拷贝构造中 p(new int(*other.p))，两对象互不影响。
+- Owner b=a 是拷贝构造，已有 b 后 b=a 是拷贝赋值，必须分别处理。
+- 三法则：自定义析构、拷贝构造、拷贝赋值通常一起考虑。五法则再考虑移动构造和移动赋值；零法则优先依靠 RAII 成员。
+- 用户给出 CImgCircleFrame：默认析构、删除两种复制、默认两种移动。适合非复制、可移动且成员正确管理资源的设计。
+- 默认移动按成员规则处理，不保证都转移所有权：拥有资源的裸指针仍只是复制地址；默认析构也不 delete 它。
+- 显式声明析构会阻止隐式生成移动操作。virtual 析构用于经基类指针安全销毁派生对象；noexcept 承诺不向外传播异常，不能脱离成员行为随意保证。
 
 ## 追问链
-
-1. **`= default` 等于清零吗？**
-   不等于。没有 NSDMI 的内置类型成员仍是垃圾值。要确定归零得靠 `{}` 值初始化或类内 `int x{};`。
-2. **成员变量什么时候初始化？**
-   基类构造 → 成员按**声明顺序**初始化（不是初始化列表书写顺序）→ 构造函数体。体内是**赋值**不是初始化。
-3. **哪些成员必须用初始化列表？**
-   `const` 成员、引用成员、没有默认构造的类类型成员。
-4. **什么时候必须自己写析构？**
-   持有裸资源（`fclose`/`Release()`）时；用 RAII 成员（`unique_ptr`/`vector`）就不必写。
+1. 浅拷贝只导致泄漏？→ 构造复制常导致重复释放；赋值还可能泄漏旧资源。
+2. 默认移动一定安全高效？→ 取决于成员及所有权。
+3. 禁止复制如何写？→ 拷贝构造与拷贝赋值均 =delete。
 
 ## 项目证据 / 反例
-
-- 工业测量项目：`CImgCircleFrame` 删拷贝、default 移动、虚析构 —— 独占语义 + 可入容器 + 正确多态销毁。
-- **反例**：写了 `= default` 就以为有定义可到处用 ✗ —— 若被隐式删除，报的是 "use of deleted function"。
-- **反例**：删了拷贝却没写移动 ✗ —— 对象会连 `push_back` 都塞不进去。
+- 用户提供了 CImgCircleFrame 特殊成员函数声明；尚未提供成员定义和项目上下文，无法验证具体资源所有权。
 
 ## 关联
-
-- [[cpp/object-model/virtual-dispatch]]
+- [[cpp/memory/raii]]
 - [[cpp/memory/noexcept-and-move]]
